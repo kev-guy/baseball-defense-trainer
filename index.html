@@ -1,3 +1,4 @@
+
 <!doctype html>
 <html lang="en">
 <head>
@@ -690,7 +691,8 @@ async function render() {
     ? s.players.filter(p => p.targetIds && p.targetIds.length).map(p => [p.id, p.targetIds[0]])
     : Object.entries(assignments);
 
-  const player = s.players.find(p => p.id === playerId);
+  movementEntries.forEach(([playerId, targetId], moveIdx) => {
+    const player = s.players.find(p => p.id === playerId);
     const target = s.targets.find(t => t.id === targetId);
     if (!player || !target) return;
 
