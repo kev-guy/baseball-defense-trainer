@@ -319,6 +319,30 @@ let resultMap = {};
 let firstTryMiss = {};
 let scenarioScores = {};
 let showFullReveal = false;
+let finalModalTimeout = null;
+let finalModalDelayMs = 7000;
+
+function clearFinalModalTimer() {
+  if (finalModalTimeout) {
+    clearTimeout(finalModalTimeout);
+    finalModalTimeout = null;
+  }
+}
+
+function openFinalModalNow({ total, maxTotal, percent } = {}) {
+  finalTitle.textContent = quizMode === 'random' ? 'Random Practice Complete' : 'Training Complete';
+  finalSummary.innerHTML = `<div><strong>${playerName}</strong></div><div style="margin-top:6px">Score: <strong>${total} / ${maxTotal}</strong> (${percent}%)</div><div style="margin-top:6px">Mode: ${quizMode === 'random' ? 'Random Practice' : 'In Order'}</div><div style="margin-top:6px">Review the last play on the field any time by pressing Exit.</div>`;
+  renderFinalBreakdown();
+  if (finalModal) finalModal.classList.remove('hidden');
+}
+
+function scheduleFinalModal(payload, delayMs = finalModalDelayMs) {
+  clearFinalModalTimer();
+  finalModalTimeout = setTimeout(() => {
+    finalModalTimeout = null;
+    openFinalModalNow(payload);
+  }, delayMs);
+}
 
 function currentScenario() {
   return scenarios[scenarioOrder[currentIndex] ?? currentIndex];
@@ -492,6 +516,7 @@ function getPercentScore() {
 }
 
 function resetScenarioState() {
+  clearFinalModalTimer();
   phase = 'throw';
   selectedPlayer = null;
   throwAnswer = null;
@@ -675,29 +700,33 @@ async function finalizeScenario() {
   const score = getScenarioScore();
   const maxPts = getScenarioMaxPoints(s);
   completeBannerEl.classList.remove('hidden');
+  clearFinalModalTimer();
+
   if (currentIndex < scenarioOrder.length - 1) {
     completeBannerEl.innerHTML = `${playerName}, you scored ${score} / ${maxPts} on this scenario.<div class="reveal-note">Full correct play shown below, with every assignment explained on the right.</div>`;
     nextBtn.classList.remove('hidden');
+    await render();
   } else {
     scenarioScores[currentScenario().id] = score;
     recordScenarioPositionStats();
     const total = getTotalScore();
     const maxTotal = getQuizMaxPoints();
     const percent = getPercentScore();
-    completeBannerEl.innerHTML = `${playerName}, final score: ${total} / ${maxTotal} (${percent}%).<div class="reveal-note">Full correct play shown below, with every assignment explained on the right.</div>`;
+
+    completeBannerEl.innerHTML = `${playerName}, final score: ${total} / ${maxTotal} (${percent}%).<div class="reveal-note">Full correct play is playing out now. Your completion summary will appear in about ${Math.round(finalModalDelayMs / 1000)} seconds, and you can press Exit there to come back and review this last play.</div>`;
     nextBtn.textContent = 'Finished';
     nextBtn.classList.add('hidden');
-    finalTitle.textContent = quizMode === 'random' ? 'Random Practice Complete' : 'Training Complete';
-    finalSummary.innerHTML = `<div><strong>${playerName}</strong></div><div style="margin-top:6px">Score: <strong>${total} / ${maxTotal}</strong> (${percent}%)</div><div style="margin-top:6px">Mode: ${quizMode === 'random' ? 'Random Practice' : 'In Order'}</div>`;
-    renderFinalBreakdown();
-    if (finalModal) finalModal.classList.remove('hidden');
+
+    await render();
+
+    scheduleFinalModal({ total, maxTotal, percent }, finalModalDelayMs);
+
     if (!savedScore) {
       await saveLeaderboardRow(playerName, percent);
       savedScore = true;
       await renderLeaderboard();
     }
   }
-  await render();
 }
 
 async function maybeFinishScenario() {
@@ -891,10 +920,11 @@ restartBtn.addEventListener('click', async () => {
 });
 
 if (closeFinalBtn) {
-closeFinalBtn.addEventListener('click', async () => {
-  if (finalModal) finalModal.classList.add('hidden');
-  await render();
-});
+  closeFinalBtn.addEventListener('click', async () => {
+    clearFinalModalTimer();
+    if (finalModal) finalModal.classList.add('hidden');
+    await render();
+  });
 }
 
 nextBtn.addEventListener('click', async () => {
