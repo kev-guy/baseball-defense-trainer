@@ -100,16 +100,7 @@ h2.sub{margin:10px 0 0;color:#d5e1f1;font-size:clamp(18px,3vw,28px);font-weight:
 .throw-btns.phase-complete{opacity:.35;pointer-events:none}
 @keyframes pulseRing{0%{transform:scale(1)}50%{transform:scale(1.08)}100%{transform:scale(1)}}
 
-
-.export-status{margin-top:10px;color:#f9d34d;font-size:15px;font-weight:800;min-height:20px}
-body.export-mode .overlay-svg .reveal-animate,
-body.export-mode .overlay-svg .reveal-pop,
-body.export-mode .reveal-item{opacity:1 !important;animation:none !important}
-body.export-mode .player-pulse{animation:none !important}
 </style>
-
-<script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 </head>
 <body>
 
@@ -202,9 +193,7 @@ body.export-mode .player-pulse{animation:none !important}
         <div class="actions">
           <button id="nextBtn" class="secondary-btn hidden">Next Scenario</button>
           <button id="restartBtn" class="secondary-btn">Restart Quiz</button>
-          <button id="exportBtn" class="secondary-btn" type="button">Export Scenario Images</button>
         </div>
-        <div id="exportStatus" class="export-status"></div>
         <div class="legend">
           <div class="legend-item"><span class="dot yellow"></span> selected player</div>
           <div class="legend-item"><span class="dot blue"></span> target circle</div>
@@ -318,8 +307,6 @@ const selectionSummary = document.getElementById('selectionSummary');
 const posChecks = Array.from(document.querySelectorAll('.pos-check'));
 const modeChecks = Array.from(document.querySelectorAll('input[name="quizMode"]'));
 const restartBtn = document.getElementById('restartBtn');
-const exportBtn = document.getElementById('exportBtn');
-const exportStatus = document.getElementById('exportStatus');
 const startScenarioInput = document.getElementById('startScenarioInput');
 const nextBtn = document.getElementById('nextBtn');
 const fieldImage = document.getElementById('fieldImage');
@@ -349,7 +336,6 @@ let scenarioScores = {};
 let showFullReveal = false;
 let finalModalTimeout = null;
 let finalModalDelayMs = 7000;
-let exportMode = false;
 
 function clearFinalModalTimer() {
   if (finalModalTimeout) {
@@ -784,7 +770,6 @@ async function finalizeScenario() {
 }
 
 async function maybeFinishScenario() {
-  if (exportMode) return;
   const s = currentScenario();
   const remaining = getRemainingSelectedPositions(s);
   if (!throwCorrect || remaining.length !== 0) return;
@@ -1002,138 +987,6 @@ nextBtn.addEventListener('click', async () => {
   nextBtn.textContent = 'Next Scenario';
   await render();
 });
-
-
-function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
-
-function pickPrimaryThrow(s) {
-  const opts = s.validThrows || [];
-  return opts.find(x => x !== 'Cutoff') || opts[0] || '2B';
-}
-
-function safeFileName(str) {
-  return String(str || '')
-    .replace(/[^a-z0-9\-_ ]/gi, '')
-    .replace(/\s+/g, '_')
-    .slice(0, 50);
-}
-
-async function waitForFieldImage() {
-  await delay(250);
-  if (!fieldImage) return;
-  if (fieldImage.complete && fieldImage.naturalWidth) return;
-  await new Promise(resolve => {
-    const done = () => resolve();
-    fieldImage.addEventListener('load', done, { once: true });
-    fieldImage.addEventListener('error', done, { once: true });
-    setTimeout(done, 2000);
-  });
-  await delay(150);
-}
-
-async function prepareScenarioForExport(index) {
-  currentIndex = index;
-  phase = 'players';
-  selectedPlayer = null;
-  throwCorrect = true;
-  throwFirstTry = true;
-  throwAnswer = pickPrimaryThrow(currentScenario());
-  assignments = {};
-  resultMap = {};
-  firstTryMiss = {};
-  showFullReveal = true;
-  completeBannerEl.classList.add('hidden');
-  nextBtn.classList.add('hidden');
-  const s = currentScenario();
-  s.players.forEach(p => {
-    if (p.targetIds && p.targetIds.length) assignments[p.id] = p.targetIds[0];
-  });
-  await render();
-  await waitForFieldImage();
-}
-
-async function exportAllScenarioImages() {
-  if (!window.html2canvas || !window.JSZip) {
-    alert('Export tools are still loading. Please wait a few seconds and try again.');
-    return;
-  }
-  const originalState = {
-    playerName, currentIndex, phase, selectedPlayer, throwAnswer, throwCorrect,
-    throwFirstTry, selectedPositions: [...selectedPositions], scenarioOrder: [...scenarioOrder],
-    assignments: {...assignments}, resultMap: {...resultMap}, firstTryMiss: {...firstTryMiss},
-    showFullReveal
-  };
-
-  exportMode = true;
-  document.body.classList.add('export-mode');
-  exportBtn.disabled = true;
-  exportBtn.textContent = 'Exporting...';
-  if (exportStatus) exportStatus.textContent = 'Preparing all 39 scenario images...';
-
-  try {
-    playerName = playerName || 'Export';
-    selectedPositions = ['P','C','1B','2B','SS','3B','LF','CF','RF'];
-    scenarioOrder = scenarios.map((_, idx) => idx);
-    const zip = new JSZip();
-    const node = document.querySelector('.field-wrap');
-
-    for (let i = 0; i < scenarios.length; i++) {
-      const s = scenarios[i];
-      if (exportStatus) exportStatus.textContent = `Exporting scenario ${i + 1} of ${scenarios.length}: ${s.title}`;
-      await prepareScenarioForExport(i);
-      await delay(300);
-      const canvas = await html2canvas(node, {
-        backgroundColor: null,
-        scale: 3,
-        useCORS: true,
-        allowTaint: true,
-        logging: false
-      });
-      const dataUrl = canvas.toDataURL('image/png');
-      const base64 = dataUrl.split(',')[1];
-      const num = String(i + 1).padStart(2, '0');
-      zip.file(`scenario${num}_${safeFileName(s.title)}.png`, base64, { base64: true });
-    }
-
-    if (exportStatus) exportStatus.textContent = 'Creating ZIP download...';
-    const blob = await zip.generateAsync({ type: 'blob' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'hornets_scenario_field_exports.zip';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    if (exportStatus) exportStatus.textContent = 'Done — downloaded hornets_scenario_field_exports.zip';
-  } catch (err) {
-    console.error(err);
-    alert('Export failed. Check the console for details, or try from Chrome on desktop.');
-    if (exportStatus) exportStatus.textContent = 'Export failed — try again from Chrome on desktop.';
-  } finally {
-    playerName = originalState.playerName;
-    currentIndex = originalState.currentIndex;
-    phase = originalState.phase;
-    selectedPlayer = originalState.selectedPlayer;
-    throwAnswer = originalState.throwAnswer;
-    throwCorrect = originalState.throwCorrect;
-    throwFirstTry = originalState.throwFirstTry;
-    selectedPositions = originalState.selectedPositions;
-    scenarioOrder = originalState.scenarioOrder;
-    assignments = originalState.assignments;
-    resultMap = originalState.resultMap;
-    firstTryMiss = originalState.firstTryMiss;
-    showFullReveal = originalState.showFullReveal;
-    document.body.classList.remove('export-mode');
-    exportMode = false;
-    exportBtn.disabled = false;
-    exportBtn.textContent = 'Export Scenario Images';
-    await render();
-  }
-}
-
-if (exportBtn) {
-  exportBtn.addEventListener('click', exportAllScenarioImages);
-}
 
 (async function init() {
   await renderLeaderboard();
