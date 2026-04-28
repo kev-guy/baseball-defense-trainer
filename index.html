@@ -89,7 +89,27 @@ h2.sub{margin:10px 0 0;color:#d5e1f1;font-size:clamp(18px,3vw,28px);font-weight:
 .break-row{display:flex;justify-content:space-between;gap:10px;padding:12px 14px;background:#082042;border:1px solid #1f5f8a;border-radius:14px}
 .hidden{display:none !important}
 .small-note{color:var(--muted);font-size:14px;margin-top:6px}
+
+.phase-helper{margin-top:12px;padding:14px 16px;border-radius:20px;border:2px solid rgba(249,211,77,.6);background:rgba(249,211,77,.12);color:#fff}
+.phase-helper.hidden{display:none !important}
+.phase-helper-title{font-size:24px;font-weight:900;line-height:1.1}
+.phase-helper-steps{margin-top:6px;font-size:18px;color:#f7fbff;font-weight:700;line-height:1.35}
+.phase-helper-steps span{display:block}
+.player-pulse{animation:pulseRing 1.15s ease-in-out infinite}
+.field-wrap.phase-players-active .player-label.clickable{filter:drop-shadow(0 0 10px rgba(249,211,77,.6))}
+.throw-btns.phase-complete{opacity:.35;pointer-events:none}
+@keyframes pulseRing{0%{transform:scale(1)}50%{transform:scale(1.08)}100%{transform:scale(1)}}
+
+
+.export-status{margin-top:10px;color:#f9d34d;font-size:15px;font-weight:800;min-height:20px}
+body.export-mode .overlay-svg .reveal-animate,
+body.export-mode .overlay-svg .reveal-pop,
+body.export-mode .reveal-item{opacity:1 !important;animation:none !important}
+body.export-mode .player-pulse{animation:none !important}
 </style>
+
+<script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 </head>
 <body>
 
@@ -158,6 +178,7 @@ h2.sub{margin:10px 0 0;color:#d5e1f1;font-size:clamp(18px,3vw,28px);font-weight:
       <p id="cardText">Look at the image, then choose the best throw.</p>
       <div class="status" id="status"></div>
       <div id="completeBanner" class="complete-banner hidden"></div>
+      <div id="phaseHelper" class="phase-helper hidden"><div class="phase-helper-title">Now place the fielders</div><div class="phase-helper-steps"><span>1. Tap a player</span><span>2. Tap where he goes</span></div></div>
       <div class="board">
         <div class="field-scenario-bar">
           <div>
@@ -181,7 +202,9 @@ h2.sub{margin:10px 0 0;color:#d5e1f1;font-size:clamp(18px,3vw,28px);font-weight:
         <div class="actions">
           <button id="nextBtn" class="secondary-btn hidden">Next Scenario</button>
           <button id="restartBtn" class="secondary-btn">Restart Quiz</button>
+          <button id="exportBtn" class="secondary-btn" type="button">Export Scenario Images</button>
         </div>
+        <div id="exportStatus" class="export-status"></div>
         <div class="legend">
           <div class="legend-item"><span class="dot yellow"></span> selected player</div>
           <div class="legend-item"><span class="dot blue"></span> target circle</div>
@@ -279,6 +302,7 @@ const closeFinalBtn = document.getElementById('closeFinalBtn');
 const scenarioBadge = document.getElementById('scenarioBadge');
 const cardTitle = document.getElementById('cardTitle');
 const cardText = document.getElementById('cardText');
+const phaseHelper = document.getElementById('phaseHelper');
 const throwButtons = document.getElementById('throwButtons');
 const leaderboardEl = document.getElementById('leaderboard');
 const leaderboardEmptyEl = document.getElementById('leaderboardEmpty');
@@ -294,6 +318,8 @@ const selectionSummary = document.getElementById('selectionSummary');
 const posChecks = Array.from(document.querySelectorAll('.pos-check'));
 const modeChecks = Array.from(document.querySelectorAll('input[name="quizMode"]'));
 const restartBtn = document.getElementById('restartBtn');
+const exportBtn = document.getElementById('exportBtn');
+const exportStatus = document.getElementById('exportStatus');
 const startScenarioInput = document.getElementById('startScenarioInput');
 const nextBtn = document.getElementById('nextBtn');
 const fieldImage = document.getElementById('fieldImage');
@@ -323,6 +349,7 @@ let scenarioScores = {};
 let showFullReveal = false;
 let finalModalTimeout = null;
 let finalModalDelayMs = 7000;
+let exportMode = false;
 
 function clearFinalModalTimer() {
   if (finalModalTimeout) {
@@ -444,6 +471,26 @@ function getRevealItems(s) {
   return items;
 }
 
+function clearPhaseHelperTimer() {
+  if (phaseHelperTimer) {
+    clearTimeout(phaseHelperTimer);
+    phaseHelperTimer = null;
+  }
+}
+
+function showPlayersPhaseHelper() {
+  clearPhaseHelperTimer();
+  phaseHelper.classList.remove('hidden');
+  phaseHelperTimer = setTimeout(() => {
+    phaseHelper.classList.add('hidden');
+    phaseHelperTimer = null;
+  }, phaseHelperDurationMs);
+}
+
+function getFirstOpenPlayerId(s) {
+  return getRemainingSelectedPositions(s)[0] || null;
+}
+
 function updateStartState() {
   const picked = posChecks.filter(ch => ch.checked).map(ch => ch.value);
   selectionSummary.textContent = `Selected positions: ${picked.length ? picked.join(', ') : 'none'}`;
@@ -534,10 +581,14 @@ function resetScenarioState() {
 }
 
 function drawLabel(player) {
-  const g = svgEl('g', { 'data-player-label': player.id });
+  const g = svgEl('g', { 'data-player-label': player.id, 'class':'player-label' });
   const clickable = phase === 'players' && !selectedPlayer && player.targetIds && player.targetIds.length && selectedPositions.includes(player.id) && !assignments[player.id];
   if (clickable) {
     g.style.cursor = 'pointer';
+    g.style.pointerEvents = 'all';
+    g.classList.add('clickable');
+    const firstOpenId = getFirstOpenPlayerId(currentScenario());
+    if (!selectedPlayer && player.id === firstOpenId) g.classList.add('player-pulse');
     g.addEventListener('click', () => handlePlayerClick(player.id));
   } else {
     g.style.pointerEvents = 'none';
@@ -545,13 +596,14 @@ function drawLabel(player) {
   const tx = player.lx, ty = player.ly;
   const w = player.label.length === 1 ? 30 : 46, h = 28, rx = 13;
   const isSelected = selectedPlayer === player.id;
-  const hit = svgEl('rect', {x: tx-w/2-22, y: ty-h/2-16, width: w+44, height: h+32, rx: rx+12, fill:'rgba(0,0,0,0)'});
+  const hit = svgEl('rect', {x: tx-w/2-28, y: ty-h/2-22, width: w+56, height: h+44, rx: rx+16, fill:'rgba(255,255,255,0.001)', 'pointer-events':'all'});
   const rect = svgEl('rect', {
     x: tx-w/2, y: ty-h/2, width:w, height:h, rx,
     fill:isSelected ? '#f9d34d' : '#68d08a',
-    stroke:isSelected ? '#fff3b0' : '#d8fff0', 'stroke-width':3
+    stroke:isSelected ? '#fff3b0' : '#d8fff0', 'stroke-width':3,
+    'pointer-events':'none'
   });
-  const text = svgEl('text', {x:tx, y:ty+7, 'text-anchor':'middle', 'font-size':17, 'font-weight':'900', fill:'#06211b'});
+  const text = svgEl('text', {x:tx, y:ty+7, 'text-anchor':'middle', 'font-size':17, 'font-weight':'900', fill:'#06211b', 'pointer-events':'none'});
   text.textContent = player.label;
   g.append(hit, rect, text);
   return g;
@@ -732,6 +784,7 @@ async function finalizeScenario() {
 }
 
 async function maybeFinishScenario() {
+  if (exportMode) return;
   const s = currentScenario();
   const remaining = getRemainingSelectedPositions(s);
   if (!throwCorrect || remaining.length !== 0) return;
@@ -749,17 +802,20 @@ async function render() {
   loadScenarioImage(s);
   overlay.setAttribute('viewBox', s.viewBox || '0 0 1414 1360');
   scenarioBadge.textContent = `Scenario: ${currentIndex+1} / ${scenarios.length}`;
-  phaseBadge.textContent = phase === 'throw' ? 'Phase: Throw Decision' : 'Phase: Player Spots';
+  phaseBadge.textContent = phase === 'throw' ? 'Step 1: Choose the Throw' : 'Step 2: Place the Fielders';
   countBadge.textContent = `Assignments: ${Object.keys(assignments).length} / ${getSelectedAnswerableCount(s)}`;
   progressBadge.textContent = `Scenario: ${currentIndex + 1} / ${scenarioOrder.length}`;
   scoreBadge.textContent = `Total Score: ${getTotalScore()} / ${getQuizMaxPoints()} (${getPercentScore()}%)`;
   playerBadge.textContent = `Player: ${playerName || '—'}`;
   positionsBadge.textContent = `Positions: ${getSelectedPositionsLabel()}`;
-  cardTitle.textContent = getActionTitle();
+  cardTitle.textContent = phase === 'throw' ? getActionTitle() : 'Now place the fielders';
   cardText.textContent = phase === 'throw'
     ? 'Look at the image, then choose the best throw.'
-    : 'Tap a position label, then tap the blue circle where that player should go.';
-  throwButtons.classList.toggle('hidden', phase !== 'throw');
+    : '1. Tap a player. 2. Tap where he goes.';
+  throwButtons.classList.remove('hidden');
+  throwButtons.classList.toggle('phase-complete', phase !== 'throw');
+  phaseHelper.classList.toggle('hidden', phase !== 'players');
+  document.querySelector('.field-wrap').classList.toggle('phase-players-active', phase === 'players' && !showFullReveal);
 
   overlay.innerHTML = `<defs>
       <marker id="arrowHead" markerWidth="8" markerHeight="8" refX="6.8" refY="4" orient="auto">
@@ -815,7 +871,7 @@ async function handlePlayerClick(playerId) {
   const player = s.players.find(p => p.id === playerId);
   if (!player || !player.targetIds.length || assignments[player.id]) return;
   selectedPlayer = playerId;
-  statusEl.textContent = `Selected ${player.label}. Now tap the destination circle.`;
+  statusEl.textContent = `Selected ${player.label}. Step 2: tap where he goes.`;
   await render();
 }
 
@@ -850,18 +906,19 @@ document.querySelectorAll('[data-throw]').forEach(btn => {
     if (!correct) throwFirstTry = false;
     resultMap.THROW = {
       title:`Throw decision — ${correct ? 'Correct' : 'Wrong'}`,
-      text: correct ? `Good choice: ${ans}.` : 'That throw is not accepted for this scenario.',
+      text: correct ? `Good choice: ${ans}. Next: tap a player, then tap where he goes.` : 'That throw is not accepted for this scenario.',
       correct
     };
-    statusEl.textContent = correct ? 'Throw choice accepted.' : 'That throw is not accepted for this scenario.';
+    statusEl.textContent = correct ? 'Good throw. Now place the fielders: 1) tap a player  2) tap where he goes.' : 'That throw is not accepted for this scenario.';
     if (correct) {
       throwCorrect = true;
       phase = 'players';
       const remaining = getRemainingSelectedPositions(s);
+      showPlayersPhaseHelper();
       if (remaining.length === 0) {
         statusEl.textContent = 'No selected positions to answer in this scenario.';
       } else {
-        statusEl.textContent = `Still to answer in this play: ${remaining.join(', ')}`;
+        statusEl.textContent = `Now place the fielders: 1) tap a player  2) tap where he goes. Still to answer: ${remaining.join(', ')}`;
       }
     }
     await render();
@@ -945,6 +1002,138 @@ nextBtn.addEventListener('click', async () => {
   nextBtn.textContent = 'Next Scenario';
   await render();
 });
+
+
+function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+function pickPrimaryThrow(s) {
+  const opts = s.validThrows || [];
+  return opts.find(x => x !== 'Cutoff') || opts[0] || '2B';
+}
+
+function safeFileName(str) {
+  return String(str || '')
+    .replace(/[^a-z0-9\-_ ]/gi, '')
+    .replace(/\s+/g, '_')
+    .slice(0, 50);
+}
+
+async function waitForFieldImage() {
+  await delay(250);
+  if (!fieldImage) return;
+  if (fieldImage.complete && fieldImage.naturalWidth) return;
+  await new Promise(resolve => {
+    const done = () => resolve();
+    fieldImage.addEventListener('load', done, { once: true });
+    fieldImage.addEventListener('error', done, { once: true });
+    setTimeout(done, 2000);
+  });
+  await delay(150);
+}
+
+async function prepareScenarioForExport(index) {
+  currentIndex = index;
+  phase = 'players';
+  selectedPlayer = null;
+  throwCorrect = true;
+  throwFirstTry = true;
+  throwAnswer = pickPrimaryThrow(currentScenario());
+  assignments = {};
+  resultMap = {};
+  firstTryMiss = {};
+  showFullReveal = true;
+  completeBannerEl.classList.add('hidden');
+  nextBtn.classList.add('hidden');
+  const s = currentScenario();
+  s.players.forEach(p => {
+    if (p.targetIds && p.targetIds.length) assignments[p.id] = p.targetIds[0];
+  });
+  await render();
+  await waitForFieldImage();
+}
+
+async function exportAllScenarioImages() {
+  if (!window.html2canvas || !window.JSZip) {
+    alert('Export tools are still loading. Please wait a few seconds and try again.');
+    return;
+  }
+  const originalState = {
+    playerName, currentIndex, phase, selectedPlayer, throwAnswer, throwCorrect,
+    throwFirstTry, selectedPositions: [...selectedPositions], scenarioOrder: [...scenarioOrder],
+    assignments: {...assignments}, resultMap: {...resultMap}, firstTryMiss: {...firstTryMiss},
+    showFullReveal
+  };
+
+  exportMode = true;
+  document.body.classList.add('export-mode');
+  exportBtn.disabled = true;
+  exportBtn.textContent = 'Exporting...';
+  if (exportStatus) exportStatus.textContent = 'Preparing all 39 scenario images...';
+
+  try {
+    playerName = playerName || 'Export';
+    selectedPositions = ['P','C','1B','2B','SS','3B','LF','CF','RF'];
+    scenarioOrder = scenarios.map((_, idx) => idx);
+    const zip = new JSZip();
+    const node = document.querySelector('.field-wrap');
+
+    for (let i = 0; i < scenarios.length; i++) {
+      const s = scenarios[i];
+      if (exportStatus) exportStatus.textContent = `Exporting scenario ${i + 1} of ${scenarios.length}: ${s.title}`;
+      await prepareScenarioForExport(i);
+      await delay(300);
+      const canvas = await html2canvas(node, {
+        backgroundColor: null,
+        scale: 3,
+        useCORS: true,
+        allowTaint: true,
+        logging: false
+      });
+      const dataUrl = canvas.toDataURL('image/png');
+      const base64 = dataUrl.split(',')[1];
+      const num = String(i + 1).padStart(2, '0');
+      zip.file(`scenario${num}_${safeFileName(s.title)}.png`, base64, { base64: true });
+    }
+
+    if (exportStatus) exportStatus.textContent = 'Creating ZIP download...';
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'hornets_scenario_field_exports.zip';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    if (exportStatus) exportStatus.textContent = 'Done — downloaded hornets_scenario_field_exports.zip';
+  } catch (err) {
+    console.error(err);
+    alert('Export failed. Check the console for details, or try from Chrome on desktop.');
+    if (exportStatus) exportStatus.textContent = 'Export failed — try again from Chrome on desktop.';
+  } finally {
+    playerName = originalState.playerName;
+    currentIndex = originalState.currentIndex;
+    phase = originalState.phase;
+    selectedPlayer = originalState.selectedPlayer;
+    throwAnswer = originalState.throwAnswer;
+    throwCorrect = originalState.throwCorrect;
+    throwFirstTry = originalState.throwFirstTry;
+    selectedPositions = originalState.selectedPositions;
+    scenarioOrder = originalState.scenarioOrder;
+    assignments = originalState.assignments;
+    resultMap = originalState.resultMap;
+    firstTryMiss = originalState.firstTryMiss;
+    showFullReveal = originalState.showFullReveal;
+    document.body.classList.remove('export-mode');
+    exportMode = false;
+    exportBtn.disabled = false;
+    exportBtn.textContent = 'Export Scenario Images';
+    await render();
+  }
+}
+
+if (exportBtn) {
+  exportBtn.addEventListener('click', exportAllScenarioImages);
+}
 
 (async function init() {
   await renderLeaderboard();
