@@ -89,14 +89,7 @@ h2.sub{margin:10px 0 0;color:#d5e1f1;font-size:clamp(18px,3vw,28px);font-weight:
 .break-row{display:flex;justify-content:space-between;gap:10px;padding:12px 14px;background:#082042;border:1px solid #1f5f8a;border-radius:14px}
 .hidden{display:none !important}
 .small-note{color:var(--muted);font-size:14px;margin-top:6px}
-
-.export-note{margin-top:10px;color:#dbe8ff;font-size:14px;font-weight:700}
-.export-note.busy{color:#f9d34d}
-.export-note.done{color:#7df5b4}
 </style>
-
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </head>
 <body>
 
@@ -188,9 +181,7 @@ h2.sub{margin:10px 0 0;color:#d5e1f1;font-size:clamp(18px,3vw,28px);font-weight:
         <div class="actions">
           <button id="nextBtn" class="secondary-btn hidden">Next Scenario</button>
           <button id="restartBtn" class="secondary-btn">Restart Quiz</button>
-          <button id="exportAllBtn" class="secondary-btn" type="button">Export Scenario Images</button>
         </div>
-        <div id="exportStatus" class="export-note hidden"></div>
         <div class="legend">
           <div class="legend-item"><span class="dot yellow"></span> selected player</div>
           <div class="legend-item"><span class="dot blue"></span> target circle</div>
@@ -954,113 +945,6 @@ nextBtn.addEventListener('click', async () => {
   nextBtn.textContent = 'Next Scenario';
   await render();
 });
-
-// ----- Scenario image export helpers -----
-// Uses the current, working quiz render logic. It forces each scenario into "full reveal" mode,
-// captures the .field-wrap exactly as rendered on screen, then zips all 39 PNGs.
-const exportAllBtn = document.getElementById('exportAllBtn');
-const exportStatusEl = document.getElementById('exportStatus');
-
-function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
-
-function safeFilePart(text) {
-  return String(text || '')
-    .replace(/&/g, 'and')
-    .replace(/[^a-z0-9]+/gi, '_')
-    .replace(/^_+|_+$/g, '')
-    .slice(0, 60) || 'Scenario';
-}
-
-function waitForFieldImageLoaded(timeoutMs = 2500) {
-  return new Promise(resolve => {
-    const img = fieldImage;
-    if (!img || (img.complete && img.naturalWidth > 0)) return resolve();
-    const done = () => resolve();
-    const timer = setTimeout(done, timeoutMs);
-    img.onload = () => { clearTimeout(timer); done(); };
-    img.onerror = () => { clearTimeout(timer); done(); };
-  });
-}
-
-function setExportStatus(text, cls='busy') {
-  if (!exportStatusEl) return;
-  exportStatusEl.textContent = text;
-  exportStatusEl.classList.remove('hidden', 'busy', 'done');
-  if (cls) exportStatusEl.classList.add(cls);
-}
-
-async function forceScenarioFullRevealForExport(index) {
-  currentIndex = index;
-  scenarioOrder = scenarios.map((_, idx) => idx);
-  clearFinalModalTimer();
-  resetScenarioState();
-  phase = 'players';
-  throwCorrect = true;
-  throwFirstTry = true;
-  selectedPlayer = null;
-  showFullReveal = true;
-
-  const s = currentScenario();
-  if (s.relay && s.relayHome && (s.validThrows || []).includes('Home')) throwAnswer = 'Home';
-  else if (s.relay && (s.validThrows || []).includes('3B')) throwAnswer = '3B';
-  else throwAnswer = (s.validThrows || [])[0] || null;
-
-  assignments = {};
-  resultMap = {};
-  firstTryMiss = {};
-  await render();
-  await waitForFieldImageLoaded();
-  await sleep(550);
-}
-
-async function captureCurrentFieldPngBlob() {
-  if (typeof html2canvas === 'undefined') throw new Error('html2canvas did not load. Check your internet connection, then reload the page.');
-  const node = document.querySelector('.field-wrap');
-  const canvas = await html2canvas(node, { backgroundColor: '#eef2f6', scale: 2, useCORS: true, allowTaint: true, logging: false });
-  return await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-}
-
-async function exportAllScenarioImages() {
-  if (typeof JSZip === 'undefined') { alert('JSZip did not load. Check your internet connection, then reload the page.'); return; }
-  const btn = exportAllBtn;
-  const oldBtnText = btn ? btn.textContent : '';
-  if (btn) { btn.disabled = true; btn.textContent = 'Exporting...'; }
-  const saved = { currentIndex, phase, selectedPlayer, throwAnswer, throwCorrect, throwFirstTry, savedScore, selectedPositions: [...selectedPositions], quizMode, scenarioOrder: [...scenarioOrder], assignments: {...assignments}, resultMap: {...resultMap}, firstTryMiss: {...firstTryMiss}, showFullReveal };
-  try {
-    setExportStatus('Preparing export...', 'busy');
-    selectedPositions = ['P','C','1B','2B','SS','3B','LF','CF','RF'];
-    const zip = new JSZip();
-    for (let i = 0; i < scenarios.length; i++) {
-      const s = scenarios[i];
-      setExportStatus('Exporting scenario ' + (i + 1) + ' of ' + scenarios.length + ': ' + s.title, 'busy');
-      await forceScenarioFullRevealForExport(i);
-      const blob = await captureCurrentFieldPngBlob();
-      const num = String(i + 1).padStart(2, '0');
-      zip.file('scenario' + num + '_' + safeFilePart(s.title) + '.png', blob);
-      await sleep(100);
-    }
-    setExportStatus('Building ZIP file...', 'busy');
-    const zipBlob = await zip.generateAsync({ type: 'blob' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(zipBlob);
-    a.download = 'hornets_scenario_field_exports.zip';
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
-    setExportStatus('Done — downloaded hornets_scenario_field_exports.zip', 'done');
-  } catch (err) {
-    console.error(err);
-    setExportStatus('Export failed: ' + (err.message || err), '');
-    alert('Export failed: ' + (err.message || err));
-  } finally {
-    currentIndex = saved.currentIndex; phase = saved.phase; selectedPlayer = saved.selectedPlayer; throwAnswer = saved.throwAnswer; throwCorrect = saved.throwCorrect; throwFirstTry = saved.throwFirstTry; savedScore = saved.savedScore; selectedPositions = saved.selectedPositions; quizMode = saved.quizMode; scenarioOrder = saved.scenarioOrder; assignments = saved.assignments; resultMap = saved.resultMap; firstTryMiss = saved.firstTryMiss; showFullReveal = saved.showFullReveal;
-    if (btn) { btn.disabled = false; btn.textContent = oldBtnText || 'Export Scenario Images'; }
-    await render();
-  }
-}
-
-if (exportAllBtn) exportAllBtn.addEventListener('click', exportAllScenarioImages);
-
 
 (async function init() {
   await renderLeaderboard();
